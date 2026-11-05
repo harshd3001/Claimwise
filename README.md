@@ -1,4 +1,4 @@
-# Claimwise
+<h1><img src="frontend/public/favicon.svg" alt="" width="36" height="36" /> Claimwise</h1>
 
 Claimwise is a local employee reimbursement demo built with a React + TypeScript frontend, FastAPI backend, SQLAlchemy, and SQLite. It demonstrates the claim flow from draft through submission, approval or rejection, correction/resubmission, and payment marking.
 
