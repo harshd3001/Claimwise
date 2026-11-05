@@ -34,7 +34,7 @@ vi.mock('./api/client', () => ({
 const employee: DemoUser = { id: 'employee-demo', name: 'Maya Employee', email: 'maya@example.test', role: 'employee' };
 const manager: DemoUser = { id: 'manager-demo', name: 'User Manager', email: 'user-manager@example.test', role: 'user_manager' };
 const submitted: Claim = {
-  id: 'claim-1', employee_id: employee.id, merchant: 'Metro Cab', category: 'Travel', receipt_number: null,
+  id: 'claim-1', employee_id: employee.id, merchant: 'Metro Cab', category: 'Travel', category_id: 'cat-travel', receipt_number: null,
   description: 'Client meeting in Bengaluru', expense_date: '2026-10-12', amount_paise: 245050,
   approved_amount_paise: null, status: 'submitted', version: 3, created_at: '2026-10-12T10:00:00Z',
   updated_at: '2026-10-13T10:00:00Z', deleted_at: null,
@@ -47,11 +47,11 @@ const detail: ClaimDetail = {
   }],
 };
 
-async function setup(role: 'employee' | 'user_manager' = 'employee') {
+async function setup(role: 'employee' | 'user_manager' = 'employee', claimItems: Claim[] = [submitted]) {
   const user = role === 'employee' ? employee : manager;
   vi.mocked(api.users).mockResolvedValue([employee, manager]);
   vi.mocked(api.me).mockResolvedValue(user);
-  vi.mocked(api.claims).mockResolvedValue({ items: [submitted], total: 1 });
+  vi.mocked(api.claims).mockResolvedValue({ items: claimItems, total: claimItems.length });
   vi.mocked(api.claim).mockResolvedValue({ detail, etag: '"3"' });
   const userActions = userEvent.setup();
   render(<App />);
@@ -63,8 +63,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   vi.mocked(api.categories).mockResolvedValue([
-    'Meals', 'Travel', 'Accommodation', 'Office supplies', 'Software & subscriptions',
-    'Communication', 'Training & education', 'Client entertainment', 'Other',
+    { id: 'cat-meals', name: 'Meals' },
+    { id: 'cat-travel', name: 'Travel' },
+    { id: 'cat-accommodation', name: 'Accommodation' },
+    { id: 'cat-office-supplies', name: 'Office supplies' },
+    { id: 'cat-software', name: 'Software & subscriptions' },
+    { id: 'cat-communication', name: 'Communication' },
+    { id: 'cat-training', name: 'Training & education' },
+    { id: 'cat-client-entertainment', name: 'Client entertainment' },
+    { id: 'cat-other', name: 'Other' },
   ]);
   vi.mocked(api.create).mockResolvedValue({ ...submitted, status: 'draft' });
   vi.mocked(api.update).mockResolvedValue({ ...submitted, status: 'draft' });
@@ -109,6 +116,35 @@ describe('Claimwise journeys', () => {
     expect(await screen.findByText('Your claim list is clear')).toBeInTheDocument();
   });
 
+  it('shows partial approved and paid amounts in claim cards but omits full approvals', async () => {
+    const partialApproved: Claim = {
+      ...submitted,
+      id: 'claim-partial-approved',
+      merchant: 'Partial approval',
+      status: 'approved',
+      approved_amount_paise: 200000,
+    };
+    const partialPaid: Claim = {
+      ...partialApproved,
+      id: 'claim-partial-paid',
+      merchant: 'Partial payment',
+      status: 'paid',
+    };
+    const fullyApproved: Claim = {
+      ...partialApproved,
+      id: 'claim-full-approved',
+      merchant: 'Full approval',
+      approved_amount_paise: submitted.amount_paise,
+    };
+
+    await setup('user_manager', [partialApproved, partialPaid, fullyApproved]);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Reviewed' }));
+
+    expect(screen.getByText('Approved ₹2,000.00 of ₹2,450.50')).toBeInTheDocument();
+    expect(screen.getByText('Paid ₹2,000.00 of ₹2,450.50')).toBeInTheDocument();
+    expect(screen.queryByText('Approved ₹2,450.50 of ₹2,450.50')).not.toBeInTheDocument();
+  });
+
   it('validates required fields and amount precision before creating a draft', async () => {
     const user = await setup();
     await user.click(screen.getByRole('button', { name: '＋ New claim' }));
@@ -127,12 +163,16 @@ describe('Claimwise journeys', () => {
     vi.mocked(api.claim).mockResolvedValue({ detail: { ...detail, claim: { ...submitted, id: 'claim-new', merchant: 'Corner Cafe', status: 'draft', amount_paise: 12505 } }, etag: '"1"' });
     await user.click(screen.getByRole('button', { name: '＋ New claim' }));
     await user.type(screen.getByLabelText(/Merchant/), 'Corner Cafe');
-    await user.selectOptions(screen.getByLabelText(/Category/), 'Meals');
+    await user.selectOptions(screen.getByLabelText(/Category/), 'cat-meals');
     fireEvent.change(screen.getByLabelText(/Expense date/), { target: { value: '2026-10-20' } });
     await user.type(screen.getByLabelText(/Amount \(INR\)/), '125.05');
     await user.type(screen.getByLabelText(/Business purpose/), 'Team planning');
     await user.click(screen.getByRole('button', { name: 'Save draft' }));
-    await waitFor(() => expect(api.create).toHaveBeenCalledWith(employee.id, expect.objectContaining({ amount_paise: 12505 })));
+    await waitFor(() => expect(api.create).toHaveBeenCalledWith(employee.id, expect.objectContaining({
+      category: 'Meals',
+      category_id: 'cat-meals',
+      amount_paise: 12505,
+    })));
     expect(await screen.findByRole('heading', { name: 'Corner Cafe' })).toBeInTheDocument();
   });
 
@@ -158,7 +198,7 @@ describe('Claimwise journeys', () => {
 
     await waitFor(() => expect(api.create).toHaveBeenCalledWith(
       employee.id,
-      expect.objectContaining({ category: 'Volunteer support' }),
+      expect.objectContaining({ category: 'Volunteer support', category_id: null }),
     ));
     expect(await screen.findByText(/Volunteer support/)).toBeInTheDocument();
   });
@@ -188,7 +228,7 @@ describe('Claimwise journeys', () => {
 
     await user.click(screen.getByRole('button', { name: '＋ New claim' }));
     await user.type(screen.getByLabelText(/Merchant/), 'Metro Cafe');
-    await user.selectOptions(screen.getByRole('combobox', { name: /Category/ }), 'Meals');
+    await user.selectOptions(screen.getByRole('combobox', { name: /Category/ }), 'cat-meals');
     await user.type(screen.getByLabelText('Receipt / Bill Number (optional)'), '  INV-007-A  ');
     fireEvent.change(screen.getByLabelText(/Expense date/), { target: { value: '2026-10-20' } });
     await user.type(screen.getByLabelText(/Amount \(INR\)/), '42.50');

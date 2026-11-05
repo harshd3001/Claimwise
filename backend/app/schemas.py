@@ -40,6 +40,7 @@ def _iso_date(value: Any) -> date:
 class ClaimCreate(StrictModel):
     merchant: str = Field(max_length=120)
     category: str = Field(max_length=60)
+    category_id: str | None = Field(default=None, max_length=36)
     receipt_number: str | None = Field(default=None, max_length=120)
     description: str = Field(max_length=1000)
     expense_date: date
@@ -49,6 +50,11 @@ class ClaimCreate(StrictModel):
     @classmethod
     def trim_text(cls, value: Any) -> str:
         return _trim_required_text(value)
+
+    @field_validator("category_id", mode="before")
+    @classmethod
+    def trim_category_id(cls, value: Any) -> str | None:
+        return value.strip() or None if isinstance(value, str) else value
 
     @field_validator("receipt_number", mode="before")
     @classmethod
@@ -64,6 +70,7 @@ class ClaimCreate(StrictModel):
 class ClaimPatch(StrictModel):
     merchant: str | None = Field(default=None, max_length=120)
     category: str | None = Field(default=None, max_length=60)
+    category_id: str | None = Field(default=None, max_length=36)
     receipt_number: str | None = Field(default=None, max_length=120)
     description: str | None = Field(default=None, max_length=1000)
     expense_date: date | None = None
@@ -73,6 +80,11 @@ class ClaimPatch(StrictModel):
     @classmethod
     def trim_text(cls, value: Any) -> str:
         return _trim_required_text(value)
+
+    @field_validator("category_id", mode="before")
+    @classmethod
+    def trim_category_id(cls, value: Any) -> str | None:
+        return value.strip() or None if isinstance(value, str) else value
 
     @field_validator("receipt_number", mode="before")
     @classmethod
@@ -117,11 +129,19 @@ class UserOut(BaseModel):
     role: Literal["employee", "user_manager"]
 
 
+class ClaimCategoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+
+
 class ClaimOut(BaseModel):
     id: str
     employee_id: str
     merchant: str
     category: str
+    category_id: str | None
     receipt_number: str | None
     description: str
     expense_date: date

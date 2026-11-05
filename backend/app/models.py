@@ -28,7 +28,8 @@ class User(Base):
 class ClaimCategory(Base):
     __tablename__ = "claim_categories"
 
-    name: Mapped[str] = mapped_column(String(60), primary_key=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(60), nullable=False, unique=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
@@ -39,6 +40,9 @@ class Claim(Base):
     employee_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     merchant: Mapped[str] = mapped_column(String(120), nullable=False)
     category: Mapped[str] = mapped_column(String(60), nullable=False)
+    category_id: Mapped[str | None] = mapped_column(
+        ForeignKey("claim_categories.id"), nullable=True
+    )
     receipt_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
     description: Mapped[str] = mapped_column(String(1000), nullable=False)
     expense_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -51,6 +55,7 @@ class Claim(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     employee: Mapped[User] = relationship()
+    category_record: Mapped[ClaimCategory | None] = relationship()
     events: Mapped[list[ClaimEvent]] = relationship(
         back_populates="claim", order_by="(ClaimEvent.created_at, ClaimEvent.id)"
     )
@@ -72,6 +77,7 @@ class Claim(Base):
         ),
         CheckConstraint("version > 0", name="ck_claims_version_positive"),
         Index("ix_claims_employee_status", "employee_id", "status"),
+        Index("ix_claims_category_id", "category_id"),
     )
 
 

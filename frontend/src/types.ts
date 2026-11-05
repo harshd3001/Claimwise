@@ -9,11 +9,17 @@ export interface DemoUser {
   role: Role;
 }
 
+export interface ClaimCategory {
+  id: string;
+  name: string;
+}
+
 export interface Claim {
   id: string;
   employee_id: string;
   merchant: string;
   category: string;
+  category_id: string | null;
   receipt_number: string | null;
   description: string;
   expense_date: string;
@@ -51,6 +57,7 @@ export interface ClaimList {
 export interface ClaimFields {
   merchant: string;
   category: string;
+  category_id: string | null;
   receipt_number?: string | null;
   description: string;
   expense_date: string;

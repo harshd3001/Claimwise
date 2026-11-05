@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { parseRupeesToPaise, paiseToInput } from './money';
-import type { Claim, ClaimFields } from './types';
+import type { Claim, ClaimCategory, ClaimFields } from './types';
 
 type Props = {
-  categories: string[];
+  categories: ClaimCategory[];
   claim?: Claim;
   busy?: boolean;
   serverFields?: Record<string, string>;
@@ -22,10 +22,10 @@ export default function ClaimForm({ categories, claim, busy = false, serverField
     description: claim?.description ?? '',
   });
   const [categorySelection, setCategorySelection] = useState(() => (
-    claim?.category && !categories.includes(claim.category) ? CUSTOM_CATEGORY : claim?.category ?? ''
+    claim ? claim.category_id ?? CUSTOM_CATEGORY : ''
   ));
   const [customCategory, setCustomCategory] = useState(() => (
-    claim?.category && !categories.includes(claim.category) ? claim.category : ''
+    claim?.category_id === null ? claim.category : ''
   ));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [dismissedServerFields, setDismissedServerFields] = useState<Record<string, boolean>>({});
@@ -54,7 +54,12 @@ export default function ClaimForm({ categories, claim, busy = false, serverField
     if (!values.merchant.trim()) next.merchant = 'Enter the merchant or vendor.';
     if (values.merchant.trim().length > 120) next.merchant = 'Merchant must be 120 characters or fewer.';
     if (values.receipt_number.trim().length > 120) next.receipt_number = 'Receipt / Bill Number must be 120 characters or fewer.';
-    const category = categorySelection === CUSTOM_CATEGORY ? customCategory.trim() : categorySelection.trim();
+    const categoryOption = categories.find((option) => option.id === categorySelection);
+    const category = categorySelection === CUSTOM_CATEGORY
+      ? customCategory.trim()
+      : claim?.category_id === categorySelection
+        ? claim.category
+        : categoryOption?.name ?? '';
     if (!category) next.category = categorySelection === CUSTOM_CATEGORY ? 'Enter a custom category.' : 'Choose a category.';
     if (category.length > 60) next.category = 'Category must be 60 characters or fewer.';
     const dateParts = /^\d{4}-(\d{2})-(\d{2})$/.exec(values.expense_date);
@@ -83,6 +88,7 @@ export default function ClaimForm({ categories, claim, busy = false, serverField
     await onSave({
       merchant: values.merchant.trim(),
       category,
+      category_id: categorySelection === CUSTOM_CATEGORY ? null : categorySelection,
       receipt_number: values.receipt_number.trim() || null,
       expense_date: values.expense_date,
       description: values.description.trim(),
@@ -131,7 +137,11 @@ export default function ClaimForm({ categories, claim, busy = false, serverField
             required
           >
             <option value="">Choose a category</option>
-            {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {claim?.category_id === category.id ? claim.category : category.name}
+              </option>
+            ))}
             <option value={CUSTOM_CATEGORY}>Custom…</option>
           </select>
           {categorySelection === CUSTOM_CATEGORY && (

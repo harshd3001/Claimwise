@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError, api } from './api/client';
 import ClaimForm from './ClaimForm';
 import { formatINR, parseRupeesToPaise, paiseToInput } from './money';
-import type { Claim, ClaimDetail, ClaimFields, ClaimStatus, DemoUser } from './types';
+import type { Claim, ClaimCategory, ClaimDetail, ClaimFields, ClaimStatus, DemoUser } from './types';
 
 type LoadedDetail = ClaimDetail & { etag: string | null };
 const statusNames: Record<ClaimStatus, string> = {
@@ -57,6 +57,11 @@ function ClaimCard({ claim, onOpen }: { claim: Claim; onOpen: () => void }) {
       <span className="claim-card-right">
         <span className="claim-amount">{formatINR(claim.amount_paise)}</span>
         <StatusBadge status={claim.status} />
+        {claim.approved_amount_paise !== null && claim.approved_amount_paise < claim.amount_paise && (
+          <span className="claim-approved-amount">
+            {claim.status === 'paid' ? 'Paid' : 'Approved'} {formatINR(claim.approved_amount_paise)} of {formatINR(claim.amount_paise)}
+          </span>
+        )}
       </span>
       <span className="claim-updated">Updated {dateLabel(claim.updated_at)}</span>
       <span className="claim-arrow" aria-hidden="true">→</span>
@@ -207,7 +212,7 @@ function ClaimDetails({ detail, currentUser, busy, onEdit, onAction, onBack, onR
 
 export default function App() {
   const [users, setUsers] = useState<DemoUser[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<ClaimCategory[]>([]);
   const [userId, setUserId] = useState(() => {
     const storedUserId = localStorage.getItem('claimwise-demo-user');
     if (storedUserId === 'approver-demo') {

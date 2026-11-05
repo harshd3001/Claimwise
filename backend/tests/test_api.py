@@ -7,9 +7,16 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from tests.conftest import identity, sample_claim
-from app.database import DEFAULT_CATEGORIES, DEMO_CLAIMS, _migrate_claim_receipt_number, _migrate_legacy_user_manager_role, create_database, initialize_database
+from app.database import (
+    DEFAULT_CATEGORIES,
+    DEMO_CLAIMS,
+    _migrate_claim_receipt_number,
+    _migrate_legacy_user_manager_role,
+    create_database,
+    initialize_database,
+)
 from app.main import create_app
-from app.models import Claim
+from app.models import Claim, ClaimCategory, User
 
 
 def create_claim(
@@ -76,7 +83,9 @@ def test_health_users_identity_and_stable_seed(client: TestClient):
     assert client.get("/api/me", headers=identity("manager-demo")).json()["role"] == "user_manager"
     categories = client.get("/api/categories")
     assert categories.status_code == 200
-    assert categories.json() == list(DEFAULT_CATEGORIES)
+    assert [category["name"] for category in categories.json()] == list(DEFAULT_CATEGORIES)
+    assert all(category["id"] for category in categories.json())
+    assert len({category["id"] for category in categories.json()}) == len(DEFAULT_CATEGORIES)
     openapi = client.get("/openapi.json").json()
     assert openapi["paths"]["/api/claims"]["post"]["responses"]["422"]["content"][
         "application/json"
@@ -92,7 +101,142 @@ def test_custom_claim_category_does_not_change_category_catalog(client: TestClie
     claim = create_claim(client, values=sample_claim(category="Volunteer support"))
 
     assert claim["category"] == "Volunteer support"
+    assert claim["category_id"] is None
     assert client.get("/api/categories").json() == categories_before
+
+
+def test_catalog_category_id_is_stored_and_validated(client: TestClient):
+    category = next(
+        option for option in client.get("/api/categories").json()
+        if option["name"] == "Meals"
+    )
+    claim = create_claim(
+        client,
+        values=sample_claim(category="Meals", category_id=category["id"]),
+    )
+
+    assert claim["category"] == "Meals"
+    assert claim["category_id"] == category["id"]
+
+    mismatch = client.post(
+        "/api/claims",
+        headers=identity(),
+        json=sample_claim(category="Travel", category_id=category["id"]),
+    )
+    assert_error(mismatch, 422, "validation_error")
+
+
+def test_category_migration_preserves_existing_names_and_claim_snapshots():
+    engine, sessions = create_database("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE claim_categories (name VARCHAR(60) PRIMARY KEY, sort_order INTEGER NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO claim_categories (name, sort_order) VALUES ('Meals', 0), ('Local travel', 1)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE claims (id TEXT PRIMARY KEY, category TEXT NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO claims (id, category) VALUES "
+            "('existing-claim', 'Meals'), ('custom-claim', 'Volunteer support')"
+        )
+
+    initialize_database(engine, sessions)
+    with engine.connect() as connection:
+        migrated_categories = connection.exec_driver_sql(
+            "SELECT id, name, sort_order FROM claim_categories ORDER BY sort_order"
+        ).all()
+        claim_category = connection.exec_driver_sql(
+            "SELECT category, category_id FROM claims WHERE id='existing-claim'"
+        ).one()
+        custom_category_id = connection.exec_driver_sql(
+            "SELECT category_id FROM claims WHERE id='custom-claim'"
+        ).scalar_one()
+
+    assert migrated_categories[0].name == "Meals"
+    assert migrated_categories[0].sort_order == 0
+    assert "Local travel" in {row.name for row in migrated_categories}
+    assert set(DEFAULT_CATEGORIES).issubset({row.name for row in migrated_categories})
+    assert all(row.id for row in migrated_categories)
+    assert claim_category.category == "Meals"
+    assert claim_category.category_id == migrated_categories[0].id
+    assert custom_category_id is None
+
+    initialize_database(engine, sessions)
+    with engine.connect() as connection:
+        categories_after_restart = connection.exec_driver_sql(
+            "SELECT id, name FROM claim_categories ORDER BY sort_order"
+        ).all()
+        claim_after_restart = connection.exec_driver_sql(
+            "SELECT category, category_id FROM claims WHERE id='existing-claim'"
+        ).one()
+    assert [(row.id, row.name) for row in categories_after_restart] == [
+        (row.id, row.name) for row in migrated_categories
+    ]
+    assert claim_after_restart.category == "Meals"
+    assert claim_after_restart.category_id == migrated_categories[0].id
+    engine.dispose()
+
+
+def test_renaming_catalog_category_does_not_change_existing_claim_category(client: TestClient):
+    claim = create_claim(client, values=sample_claim(category="Meals"))
+    with client.app.state.sessions.begin() as session:
+        category = session.query(ClaimCategory).filter_by(name="Meals").one()
+        category.name = "Food & meals"
+        category_id = category.id
+
+    initialize_database(client.app.state.engine, client.app.state.sessions)
+    category_response = client.get("/api/categories")
+    assert {"id": category_id, "name": "Food & meals"} in category_response.json()
+    claim_after_rename = client.get(
+        f"/api/claims/{claim['id']}", headers=identity()
+    ).json()["claim"]
+    assert claim_after_rename["category"] == "Meals"
+    assert claim_after_rename["category_id"] == category_id
+
+
+def test_category_id_patch_updates_reference_and_custom_name_snapshot(client: TestClient):
+    claim = create_claim(client, values=sample_claim(category="Meals"))
+    categories = {
+        category["name"]: category["id"]
+        for category in client.get("/api/categories").json()
+    }
+
+    updated = client.patch(
+        f"/api/claims/{claim['id']}",
+        headers={**identity(), "If-Match": '"1"'},
+        json={"category": "Travel", "category_id": categories["Travel"]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["category"] == "Travel"
+    assert updated.json()["category_id"] == categories["Travel"]
+
+    custom = client.patch(
+        f"/api/claims/{claim['id']}",
+        headers={**identity(), "If-Match": '"2"'},
+        json={"category": "Team event", "category_id": None},
+    )
+    assert custom.status_code == 200, custom.text
+    assert custom.json()["category"] == "Team event"
+    assert custom.json()["category_id"] is None
+
+
+def test_saving_other_fields_after_catalog_rename_preserves_category_snapshot(client: TestClient):
+    claim = create_claim(client, values=sample_claim(category="Meals"))
+    with client.app.state.sessions.begin() as session:
+        category = session.query(ClaimCategory).filter_by(name="Meals").one()
+        category.name = "Food & meals"
+
+    updated = client.patch(
+        f"/api/claims/{claim['id']}",
+        headers={**identity(), "If-Match": '"1"'},
+        json={"description": "Updated purpose", "category": "Meals", "category_id": claim["category_id"]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["category"] == "Meals"
+    assert updated.json()["category_id"] == claim["category_id"]
 
 
 def test_optional_receipt_number_is_trimmed_and_can_be_updated(client: TestClient):
@@ -193,7 +337,8 @@ def test_optional_sample_claims_cover_lifecycle_and_seed_idempotently(client: Te
     ).json()
     assert archived["claim"]["deleted_at"] is not None
     assert archived["events"][-1]["action"] == "deleted"
-    assert archived["events"][-1]["details"]["snapshot"]["merchant"] == "Sample Store"
+    assert archived["events"][-1]["details"] is None
+    assert archived["claim"]["merchant"] == "Sample Store"
 
 
 def test_create_edit_list_and_edit_audit(client: TestClient):
@@ -574,7 +719,7 @@ def test_if_match_missing_malformed_and_stale_do_not_write(client: TestClient):
     assert [event["action"] for event in final["events"]] == ["created", "updated"]
 
 
-def test_soft_delete_excludes_claim_but_retains_owner_history_snapshot(client: TestClient):
+def test_soft_delete_excludes_claim_but_retains_claim_and_event_history(client: TestClient):
     claim = create_claim(client)
     claim_id = claim["id"]
     deleted = client.delete(
@@ -587,11 +732,12 @@ def test_soft_delete_excludes_claim_but_retains_owner_history_snapshot(client: T
     assert client.get("/api/claims", headers=identity()).json() == {"items": [], "total": 0}
     archived = detail(client, claim_id)
     assert [event["action"] for event in archived["events"]] == ["created", "deleted"]
-    snapshot = archived["events"][-1]["details"]["snapshot"]
-    assert snapshot["id"] == claim_id
-    assert snapshot["merchant"] == "Metro Cafe"
-    assert snapshot["amount_paise"] == 12500
-    assert snapshot["status"] == "draft"
+    assert archived["events"][-1]["details"] is None
+    assert archived["claim"]["id"] == claim_id
+    assert archived["claim"]["merchant"] == "Metro Cafe"
+    assert archived["claim"]["amount_paise"] == 12500
+    assert archived["claim"]["status"] == "draft"
+    assert archived["claim"]["deleted_at"] is not None
     assert_error(client.get(f"/api/claims/{claim_id}", headers=identity("manager-demo")), 404, "not_found")
     assert_error(
         client.patch(
@@ -603,6 +749,18 @@ def test_soft_delete_excludes_claim_but_retains_owner_history_snapshot(client: T
         "claim_archived",
     )
     assert len(detail(client, claim_id)["events"]) == 2
+
+
+def test_event_actor_name_preserves_name_at_event_time(client: TestClient):
+    claim = create_claim(client)
+    with client.app.state.sessions.begin() as session:
+        user = session.get(User, "employee-demo")
+        assert user is not None
+        user.name = "Updated Employee Name"
+
+    events = detail(client, claim["id"])["events"]
+    assert events[0]["actor_id"] == "employee-demo"
+    assert events[0]["actor_name"] == "Maya Employee"
 
 
 def test_list_role_scoping_and_invalid_status(client: TestClient):

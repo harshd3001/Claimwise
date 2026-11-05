@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
+from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import Engine, create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -159,6 +160,14 @@ def initialize_database(
     seed_sample_data: bool = False,
 ) -> None:
     _migrate_legacy_user_manager_role(engine)
+    _migrate_claim_categories(engine)
+    ClaimCategory.__table__.create(engine, checkfirst=True)
+    with sessions.begin() as session:
+        for sort_order, name in enumerate(DEFAULT_CATEGORIES):
+            category_id = _category_id(name)
+            if session.get(ClaimCategory, category_id) is None:
+                session.add(ClaimCategory(id=category_id, name=name, sort_order=sort_order))
+    _migrate_claim_category_id(engine)
     Base.metadata.create_all(engine)
     _migrate_claim_receipt_number(engine)
     with sessions.begin() as session:
@@ -166,12 +175,87 @@ def initialize_database(
             user = session.get(User, values["id"])
             if user is None:
                 session.add(User(**values))
-        for sort_order, name in enumerate(DEFAULT_CATEGORIES):
-            if session.get(ClaimCategory, name) is None:
-                session.add(ClaimCategory(name=name, sort_order=sort_order))
         session.flush()
         if seed_sample_data:
             _seed_demo_claims(session)
+
+
+def _category_id(name: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"claimwise-category:{name}"))
+
+
+def _migrate_claim_categories(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+
+    with engine.begin() as connection:
+        table_exists = connection.exec_driver_sql(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='claim_categories'"
+        ).scalar_one_or_none()
+        if table_exists is None:
+            return
+
+        columns = {
+            column["name"]
+            for column in connection.exec_driver_sql(
+                "PRAGMA table_info(claim_categories)"
+            ).mappings()
+        }
+        if "id" in columns:
+            return
+
+        rows = connection.exec_driver_sql(
+            "SELECT name, sort_order FROM claim_categories ORDER BY sort_order, name"
+        ).mappings().all()
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE claim_categories_new (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                name VARCHAR(60) NOT NULL UNIQUE,
+                sort_order INTEGER NOT NULL
+            )
+            """
+        )
+        for row in rows:
+            connection.exec_driver_sql(
+                """
+                INSERT INTO claim_categories_new (id, name, sort_order)
+                VALUES (?, ?, ?)
+                """,
+                (_category_id(row["name"]), row["name"], row["sort_order"]),
+            )
+        connection.exec_driver_sql("DROP TABLE claim_categories")
+        connection.exec_driver_sql(
+            "ALTER TABLE claim_categories_new RENAME TO claim_categories"
+        )
+
+
+def _migrate_claim_category_id(engine: Engine) -> None:
+    if engine.dialect.name != "sqlite":
+        return
+
+    with engine.begin() as connection:
+        columns = {
+            column["name"]
+            for column in connection.exec_driver_sql("PRAGMA table_info(claims)").mappings()
+        }
+        if not columns or "category_id" in columns:
+            return
+
+        connection.exec_driver_sql(
+            "ALTER TABLE claims ADD COLUMN category_id VARCHAR(36) "
+            "REFERENCES claim_categories(id)"
+        )
+        connection.exec_driver_sql(
+            """
+            UPDATE claims
+            SET category_id = (
+                SELECT claim_categories.id
+                FROM claim_categories
+                WHERE claim_categories.name = claims.category
+            )
+            """
+        )
 
 
 def _migrate_claim_receipt_number(engine: Engine) -> None:
@@ -269,6 +353,9 @@ def _seed_demo_claims(session: Session) -> None:
             employee_id=values["employee_id"],
             merchant=values["merchant"],
             category=values["category"],
+            category_id=session.scalar(
+                select(ClaimCategory.id).where(ClaimCategory.name == values["category"])
+            ),
             description=values["description"],
             expense_date=datetime.strptime(values["expense_date"], "%Y-%m-%d").date(),
             amount_paise=values["amount_paise"],
@@ -296,19 +383,6 @@ def _seed_demo_claims(session: Session) -> None:
                             "before": values["original_description"],
                             "after": values["description"],
                         }
-                    }
-                }
-            if action == "deleted":
-                details = {
-                    "snapshot": {
-                        "id": claim.id,
-                        "employee_id": claim.employee_id,
-                        "merchant": claim.merchant,
-                        "category": claim.category,
-                        "description": claim.description,
-                        "expense_date": values["expense_date"],
-                        "amount_paise": claim.amount_paise,
-                        "status": "draft",
                     }
                 }
             actor = session.get(User, actor_id)

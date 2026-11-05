@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import exists, select, update
 from sqlalchemy.orm import Session
 
-from app.models import Claim, ClaimEvent, MAX_SAFE_INTEGER, User
+from app.models import Claim, ClaimCategory, ClaimEvent, MAX_SAFE_INTEGER, User
 
 
 class ApiProblem(Exception):
@@ -42,6 +42,7 @@ def claim_payload(claim: Claim) -> dict[str, Any]:
         "employee_id": claim.employee_id,
         "merchant": claim.merchant,
         "category": claim.category,
+        "category_id": claim.category_id,
         "receipt_number": claim.receipt_number,
         "description": claim.description,
         "expense_date": claim.expense_date.isoformat(),
@@ -92,16 +93,60 @@ def _new_event(
     )
 
 
+def _resolve_category(
+    session: Session,
+    category_name: str,
+    category_id: str | None,
+    *,
+    category_id_was_provided: bool,
+    preserved_category_id: str | None = None,
+    preserved_category_name: str | None = None,
+) -> tuple[str | None, str]:
+    if category_id_was_provided:
+        if category_id is None:
+            return None, category_name
+        category = session.get(ClaimCategory, category_id)
+        if category is None:
+            raise ApiProblem(
+                422,
+                "validation_error",
+                "Request validation failed.",
+                {"category_id": "Choose a category from the catalog or enter a custom category."},
+            )
+        if category.name != category_name and not (
+            category.id == preserved_category_id and category_name == preserved_category_name
+        ):
+            raise ApiProblem(
+                422,
+                "validation_error",
+                "Request validation failed.",
+                {"category_id": "The selected category does not match the category name."},
+            )
+        return category.id, category_name
+
+    category = session.scalar(
+        select(ClaimCategory).where(ClaimCategory.name == category_name)
+    )
+    return (category.id if category else None), category_name
+
+
 def create_claim(session: Session, actor: User, values: dict[str, Any]) -> Claim:
     if actor.role != "employee":
         raise ApiProblem(403, "forbidden", "Only employees can create claims.")
 
+    category_id, category_name = _resolve_category(
+        session,
+        values["category"],
+        values.get("category_id"),
+        category_id_was_provided="category_id" in values,
+    )
     now = utc_now()
     claim = Claim(
         id=str(uuid.uuid4()),
         employee_id=actor.id,
         merchant=values["merchant"],
-        category=values["category"],
+        category=category_name,
+        category_id=category_id,
         receipt_number=values.get("receipt_number"),
         description=values["description"],
         expense_date=values["expense_date"],
@@ -209,11 +254,31 @@ def mutate_claim(
             "version": claim.version + 1,
             "updated_at": utc_now(),
         }
+        if changes and ("category" in changes or "category_id" in changes):
+            category_id_was_provided = "category_id" in changes
+            if "category" in changes:
+                category_name = changes["category"]
+            elif changes.get("category_id") is not None:
+                selected_category = session.get(ClaimCategory, changes["category_id"])
+                category_name = selected_category.name if selected_category else claim.category
+            else:
+                category_name = claim.category
+            category_id, category_name = _resolve_category(
+                session,
+                category_name,
+                changes.get("category_id"),
+                category_id_was_provided=category_id_was_provided,
+                preserved_category_id=claim.category_id,
+                preserved_category_name=claim.category,
+            )
+            changes["category"] = category_name
+            changes["category_id"] = category_id
+
         details: dict[str, Any] | None = None
         if changes:
             changed_values: dict[str, dict[str, Any]] = {}
             for field, value in changes.items():
-                if value is None and field != "receipt_number":
+                if value is None and field not in {"receipt_number", "category_id"}:
                     raise ApiProblem(
                         422,
                         "validation_error",
@@ -234,7 +299,6 @@ def mutate_claim(
             updates["approved_amount_paise"] = approved_amount_paise
         if soft_delete:
             updates["deleted_at"] = utc_now()
-            details = {"snapshot": claim_payload(claim)}
 
         predicates = [
             Claim.id == claim.id,

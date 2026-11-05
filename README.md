@@ -36,7 +36,7 @@ python -m pip install -r .\backend\requirements.txt
 ```
 
 The local `.env` configures the SQLite URL and demo settings. It is intentionally ignored by Git; do not commit secrets. The local database is also ignored.
-On startup, an existing local database is migrated to the User Manager role and the optional receipt-number column while preserving existing claims and history.
+On startup, an existing local database is migrated to the User Manager role, the optional receipt-number column, stable category IDs, and claim-to-category references. Existing claims are linked by exact catalog-name match; unmatched category names remain custom text, and every claim keeps its category-name snapshot.
 
 ### 3. Start the backend
 
@@ -93,17 +93,19 @@ The local database is preloaded with representative records in every lifecycle s
 
 The demo employees are **Maya Employee** and **Arjun Employee**; the User Manager identity is **User Manager**. Their selector lets you inspect each role's own list and actions.
 
-## Architecture and data model
+## Architecture, data model, and design decisions
 
 - **React + TypeScript + Vite:** single-page UI for employees and user managers. `Design.md` defines the UI flows, styling, accessibility, and responsive behavior; read it before every frontend change.
 - **FastAPI + Pydantic:** API validation, role-specific route handling, and OpenAPI documentation.
 - **SQLAlchemy + SQLite:** local persistence for seeded demo users, claims, and append-only claim events.
-- **Categories:** common options are seeded into the `claim_categories` table and fetched by the frontend. A custom category is saved on its claim without adding a shared category.
-- **Claim amount:** stored and sent as an integer number of paise. The UI accepts rupees with at most two decimal places and formats INR for display.
-- **Receipt reference:** an optional receipt/bill number is stored as text on the claim; no receipt image upload is included.
-- **History:** edits record before/after details. Rejection, reopening, resubmission, approval, and payment are separate events. Draft deletion is soft deletion so its audit history remains available.
-- **Concurrency:** existing-claim mutations use an ETag/`If-Match` version precondition. A stale mutation fails rather than overwriting newer work.
+- **Users:** seeded demo identities are stored in `users`. Claims reference their employee by `employee_id`; event records reference the acting user by `actor_id` and preserve the actor name at event time.
+- **Categories:** common options live in `claim_categories` with stable IDs. A claim stores both nullable `category_id` and required `category` display-name snapshot. Common choices reference the catalog; custom choices store their text with a null ID. Renaming a catalog item therefore does not rewrite existing claims.
+- **Claims:** `claims` stores merchant, category snapshot/reference, optional receipt number, business description, expense date, amount, current status, version, timestamps, and soft-delete timestamp. Money is stored as integer paise; the UI accepts rupees with at most two decimal places and formats INR for display.
+- **Claim events:** `claim_events` is an append-only audit trail linked to a claim and actor. Events capture actions, status transitions, optional decision comments, and edit `details` containing before/after values. Soft deletion marks a claim with `deleted_at` without removing the claim or its history.
+- **Concurrency:** existing-claim mutations require an ETag/`If-Match` version precondition. A stale mutation fails rather than overwriting newer work.
 - **API boundary:** see [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) for routes, fields, status transitions, identity behavior, and error responses.
+
+The main relationships are `claims.employee_id → users.id`, optional `claims.category_id → claim_categories.id`, and `claim_events.claim_id → claims.id` plus `claim_events.actor_id → users.id`. The category name and actor name are snapshots intentionally retained alongside IDs so historical records remain understandable when catalog labels or user names change.
 
 ## Assumptions and limitations
 
@@ -115,4 +117,6 @@ The demo employees are **Maya Employee** and **Arjun Employee**; the User Manage
 
 ## AI-use disclosure
 
-AI coding assistance was used to help plan and implement the application, including parallel backend/frontend workstreams. The resulting code, design, and tests should be reviewed and understood by the project owner before use or presentation.
+**Tool used:** GitHub Copilot in VS Code (AI coding assistant).
+
+**How it was used:** to help plan the architecture, implement and refine the React/TypeScript frontend and FastAPI backend, update documentation, and create or adjust tests. The generated changes were reviewed during implementation, and the documented tests and build checks were run. The project owner should review and understand the code and design before use or presentation.

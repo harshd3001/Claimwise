@@ -5,11 +5,15 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('typed API client', () => {
   it('loads categories from the public category catalog endpoint', async () => {
+    const categories = [
+      { id: 'category-meals', name: 'Meals' },
+      { id: 'category-travel', name: 'Travel' },
+    ];
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify(['Meals', 'Travel']), { status: 200 }),
+      new Response(JSON.stringify(categories), { status: 200 }),
     );
 
-    await expect(api.categories()).resolves.toEqual(['Meals', 'Travel']);
+    await expect(api.categories()).resolves.toEqual(categories);
     expect(fetchMock.mock.calls[0][0]).toBe('/api/categories');
   });
 
@@ -44,7 +48,7 @@ describe('typed API client', () => {
       fields: { merchant: 'Required' },
     }), { status: 422, headers: { 'Content-Type': 'application/json' } }));
     await expect(api.create('employee-demo', {
-      merchant: '', category: 'Travel', description: 'Meeting', expense_date: '2026-10-01', amount_paise: 100,
+      merchant: '', category: 'Travel', category_id: null, description: 'Meeting', expense_date: '2026-10-01', amount_paise: 100,
     })).rejects.toMatchObject({ status: 422, fields: { merchant: 'Required' } });
   });
 

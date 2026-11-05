@@ -5,7 +5,7 @@ This contract is the shared boundary for the independently implemented FastAPI b
 ## Demo identity
 
 - `GET /api/health` and `GET /api/users` do not require a selected identity.
-- `GET /api/categories` does not require a selected identity and returns the database-backed common category names in display order.
+- `GET /api/categories` does not require a selected identity and returns the database-backed common categories, with stable IDs and display names, in display order.
 - Every other endpoint requires `X-Demo-User-ID`.
 - Stable seeded users:
   - `employee-demo` — employee, Maya Employee
@@ -18,7 +18,13 @@ This contract is the shared boundary for the independently implemented FastAPI b
 
 Claim statuses: `draft`, `submitted`, `approved`, `rejected`, `paid`.
 
-The database-backed common category catalog is seeded with `Meals`, `Travel`, `Accommodation`, `Office supplies`, `Software & subscriptions`, `Communication`, `Training & education`, `Client entertainment`, and `Other`. The frontend may submit a custom category string; it is stored on that claim and does not create a shared catalog entry.
+The database-backed common category catalog is seeded with `Meals`, `Travel`, `Accommodation`, `Office supplies`, `Software & subscriptions`, `Communication`, `Training & education`, `Client entertainment`, and `Other`. Each catalog item has a stable ID. Claims store both a nullable `category_id` reference and a required `category` name snapshot. Catalog selections store their ID and current name; custom selections store `category_id: null` and their entered text. Renaming a catalog item does not rewrite existing claims. The frontend may submit a custom category string; it is stored on that claim and does not create a shared catalog entry.
+
+Category response item:
+
+```json
+{ "id": "stable-category-id", "name": "Meals" }
+```
 
 Money fields use integer paise and are limited to JavaScript's safe integer range. `amount_paise` must be positive. On approval, `approved_amount_paise` is set and must be in `[1, amount_paise]`; it defaults to the full amount. A rupee input with more than two decimal places is invalid.
 
@@ -29,6 +35,7 @@ id: string
 employee_id: string
 merchant: string
 category: string
+category_id: string | null
 receipt_number: string | null
 description: string
 expense_date: YYYY-MM-DD
@@ -46,7 +53,7 @@ Event fields:
 ```text
 id: string
 actor_id: string
-actor_name: string
+actor_name: string (name snapshot captured when the event was created)
 action: created | updated | submitted | reopened | approved | rejected | deleted | paid
 from_status: ClaimStatus | null
 to_status: ClaimStatus | null
@@ -55,7 +62,7 @@ details: object | null
 created_at: UTC datetime
 ```
 
-Events are append-only and ordered by `(created_at, id)`. Edit event `details` records changed fields' before/after values. Soft deletion records a sufficient snapshot and does not erase the claim or history.
+Events are append-only and ordered by `(created_at, id)`. `actor_id` identifies the user; `actor_name` preserves their display name at event time. Edit event `details` records changed fields' before/after values. A soft-delete event does not duplicate the claim in `details`: soft deletion retains the claim row and its history, while marking the claim with `deleted_at`.
 
 ## Endpoints
 
@@ -88,7 +95,7 @@ Detail response:
 { "claim": {}, "events": [] }
 ```
 
-Create and update request fields use the claim field names, excluding server-owned fields. Create requires the claim fields except `receipt_number`, which is optional, trimmed, and limited to 120 characters; blank values are stored as `null`. Patch accepts one or more editable fields; setting `receipt_number` to `null` clears it. Approval body:
+Create and update request fields use the claim field names, excluding server-owned fields. `category_id` must identify a catalog category and match its current name, or be `null` for a custom category. Existing clients omitting `category_id` are supported: exact catalog-name matches are linked automatically. Create requires the claim fields except `receipt_number`, which is optional, trimmed, and limited to 120 characters; blank values are stored as `null`. Patch accepts one or more editable fields; setting `receipt_number` to `null` clears it. Approval body:
 
 ```json
 { "approved_amount_paise": 12500, "comment": "Optional note" }

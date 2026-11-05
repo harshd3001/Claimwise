@@ -104,6 +104,7 @@ Keep visual distinction between approval and payment. Do not imply that an appro
 ### Claims list
 
 - Each row/card should make merchant/title, expense date, claimed amount, status, and updated/submitted date easy to scan.
+- When the approved amount is lower than the claimed amount, show a compact “Approved/Paid amount of claimed amount” line on the card; omit it for full approvals.
 - Include a status filter with a clear “All” option. Preserve the selected filter only if it does not hide newly created/updated claims unexpectedly.
 - Sort deterministically (most recently updated first); show an informative empty state with a relevant next action.
 - On mobile, use stacked claim cards rather than forcing a wide desktop table.
@@ -112,7 +113,7 @@ Keep visual distinction between approval and payment. Do not imply that an appro
 
 - Group related fields in a clear order: merchant/category, expense date, amount, description.
 - Mark required fields visibly and associate each with a persistent label (do not rely on placeholder text).
-- Load common category choices from the backend category catalog. Include a Custom option that stores the entered category on the claim without adding a global catalog option.
+- Load common category choices from the backend category catalog using each category's stable ID and display name. Claims retain the selected category name as a snapshot. Include a Custom option that stores the entered category on the claim without adding a global catalog option.
 - Offer an optional Receipt / Bill Number text field for printed invoice references; preserve letters and leading zeros, and show a supplied value in claim details.
 - Preserve user input after validation or network errors. Show inline errors next to fields and focus the first invalid field on submit.
 - Explain the amount in INR and accept at most two decimal places. Parse decimal input exactly; do not silently round.

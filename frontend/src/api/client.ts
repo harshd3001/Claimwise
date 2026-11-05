@@ -1,4 +1,4 @@
-import type { ApiErrorBody, Claim, ClaimDetail, ClaimFields, ClaimList, DemoUser } from '../types';
+import type { ApiErrorBody, Claim, ClaimCategory, ClaimDetail, ClaimFields, ClaimList, DemoUser } from '../types';
 
 export class ApiError extends Error {
   status: number;
@@ -70,8 +70,8 @@ export const api = {
     const { data } = await request<DemoUser[] | { items: DemoUser[] }>('/users');
     return Array.isArray(data) ? data : data.items;
   },
-  async categories(): Promise<string[]> {
-    const { data } = await request<string[]>('/categories');
+  async categories(): Promise<ClaimCategory[]> {
+    const { data } = await request<ClaimCategory[]>('/categories');
     return data;
   },
   async me(userId: string): Promise<DemoUser> {

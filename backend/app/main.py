@@ -21,6 +21,7 @@ from app.models import ClaimCategory, User
 from app.schemas import (
     ApprovalRequest,
     ClaimCreate,
+    ClaimCategoryOut,
     ClaimDetailOut,
     ClaimListOut,
     ClaimOut,
@@ -136,11 +137,11 @@ def create_app(database_url: str | None = None, seed_sample_data: bool = False) 
     def users(session: Session = Depends(get_session)) -> list[User]:
         return list(session.scalars(select(User).order_by(User.id)).all())
 
-    @application.get("/api/categories", response_model=list[str])
-    def categories(session: Session = Depends(get_session)) -> list[str]:
+    @application.get("/api/categories", response_model=list[ClaimCategoryOut])
+    def categories(session: Session = Depends(get_session)) -> list[ClaimCategory]:
         return list(
             session.scalars(
-                select(ClaimCategory.name).order_by(ClaimCategory.sort_order, ClaimCategory.name)
+                select(ClaimCategory).order_by(ClaimCategory.sort_order, ClaimCategory.name)
             ).all()
         )
 
@@ -164,7 +165,7 @@ def create_app(database_url: str | None = None, seed_sample_data: bool = False) 
         session: Session = Depends(get_session),
         actor: User = Depends(current_user),
     ) -> dict[str, Any]:
-        claim = create_claim(session, actor, body.model_dump())
+        claim = create_claim(session, actor, body.model_dump(exclude_unset=True))
         response.headers["ETag"] = f'"{claim.version}"'
         return claim_payload(claim)
 
